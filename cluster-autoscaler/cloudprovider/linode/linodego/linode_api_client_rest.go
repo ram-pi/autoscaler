@@ -211,3 +211,42 @@ func (c *Client) ListLKEClusterPools(ctx context.Context, clusterID int, opts *L
 	}
 	return pools, nil
 }
+
+// LinodeType represents a Linode instance type
+type LinodeType struct {
+	ID         string           `json:"id"`
+	Label      string           `json:"label"`
+	Disk       int              `json:"disk"`
+	Memory     int              `json:"memory"`
+	VCPUs      int              `json:"vcpus"`
+	NetworkOut int              `json:"network_out"`
+	GPUs       int              `json:"gpus"`
+	Transfer   int              `json:"transfer"`
+	Class      string           `json:"class"`
+	Addons     LinodeTypeAddons `json:"addons"`
+}
+
+// LinodeTypeAddons represents additional features of a Linode type
+type LinodeTypeAddons struct {
+	Backups struct {
+		Price struct {
+			Hourly  float64 `json:"hourly"`
+			Monthly float64 `json:"monthly"`
+		} `json:"price"`
+	} `json:"backups"`
+}
+
+// GetLinodeType gets information about a specific Linode instance type
+func (c *Client) GetLinodeType(ctx context.Context, typeID string) (*LinodeType, error) {
+	url := fmt.Sprintf("%s/linode/types/%s", c.baseURL, typeID)
+	body, err := c.request(ctx, "GET", url, []byte{})
+	if err != nil {
+		return nil, err
+	}
+	linodeType := &LinodeType{}
+	err = json.Unmarshal(body, linodeType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return linodeType, nil
+}

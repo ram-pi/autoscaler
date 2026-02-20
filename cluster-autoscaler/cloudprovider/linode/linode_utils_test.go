@@ -41,3 +41,8 @@ func (l *linodeClientMock) DeleteLKEClusterPool(ctx context.Context, clusterID i
 	args := l.Called(ctx, clusterID, id)
 	return args.Error(0)
 }
+
+func (l *linodeClientMock) GetLinodeType(ctx context.Context, typeID string) (*linodego.LinodeType, error) {
+	args := l.Called(ctx, typeID)
+	return args.Get(0).(*linodego.LinodeType), args.Error(1)
+}

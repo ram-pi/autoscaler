@@ -273,10 +273,113 @@ func TestNodeGroup_Others(t *testing.T) {
 	assert.Equal(t, "node group ID: g6-standard-1 (min:1 max:7)", ng.Debug())
 	assert.Equal(t, true, ng.Exist())
 	assert.Equal(t, false, ng.Autoprovisioned())
-	_, err = ng.TemplateNodeInfo()
-	assert.Error(t, err)
 	_, err = ng.Create()
 	assert.Error(t, err)
 	err = ng.Delete()
 	assert.Error(t, err)
+}
+
+func TestNodeGroup_TemplateNodeInfo(t *testing.T) {
+	client := linodeClientMock{}
+	ctx := context.Background()
+	poolOpts := linodego.LKEClusterPoolCreateOptions{
+		Count: 1,
+		Type:  "g6-standard-2",
+	}
+	ng := NodeGroup{
+		lkePools: map[int]*linodego.LKEClusterPool{
+			1: {ID: 1, Count: 1, Type: "g6-standard-2"},
+		},
+		poolOpts:     poolOpts,
+		client:       &client,
+		lkeClusterID: 111,
+		minSize:      1,
+		maxSize:      7,
+		id:           "g6-standard-2",
+	}
+
+	// Mock GetLinodeType to return instance type info
+	client.On(
+		"GetLinodeType", ctx, "g6-standard-2",
+	).Return(
+		&linodego.LinodeType{
+			ID:     "g6-standard-2",
+			VCPUs:  2,
+			Memory: 4096, // 4GB in MB
+			GPUs:   0,
+		}, nil,
+	)
+
+	// Test that TemplateNodeInfo works
+	nodeInfo, err := ng.TemplateNodeInfo()
+	assert.NoError(t, err)
+	assert.NotNil(t, nodeInfo)
+
+	node := nodeInfo.Node()
+	assert.NotNil(t, node)
+
+	// Check CPU capacity
+	cpu := node.Status.Capacity[apiv1.ResourceCPU]
+	assert.Equal(t, int64(2), cpu.Value())
+
+	// Check Memory capacity (4GB = 4096MB = 4096*1024*1024 bytes)
+	memory := node.Status.Capacity[apiv1.ResourceMemory]
+	assert.Equal(t, int64(4096*1024*1024), memory.Value())
+
+	// Check instance type label
+	assert.Equal(t, "g6-standard-2", node.Labels[apiv1.LabelInstanceTypeStable])
+}
+
+func TestNodeGroup_TemplateNodeInfo_GPU(t *testing.T) {
+	client := linodeClientMock{}
+	ctx := context.Background()
+	poolOpts := linodego.LKEClusterPoolCreateOptions{
+		Count: 1,
+		Type:  "g2-gpu-rtx4000a1-m",
+	}
+	ng := NodeGroup{
+		lkePools: map[int]*linodego.LKEClusterPool{
+			1: {ID: 1, Count: 1, Type: "g2-gpu-rtx4000a1-m"},
+		},
+		poolOpts:     poolOpts,
+		client:       &client,
+		lkeClusterID: 111,
+		minSize:      1,
+		maxSize:      3,
+		id:           "g2-gpu-rtx4000a1-m",
+	}
+
+	// Mock GetLinodeType to return GPU instance type info
+	client.On(
+		"GetLinodeType", ctx, "g2-gpu-rtx4000a1-m",
+	).Return(
+		&linodego.LinodeType{
+			ID:     "g2-gpu-rtx4000a1-m",
+			VCPUs:  24,
+			Memory: 122880, // 120GB in MB
+			GPUs:   1,
+		}, nil,
+	)
+
+	// Test that TemplateNodeInfo works for GPU instances
+	nodeInfo, err := ng.TemplateNodeInfo()
+	assert.NoError(t, err)
+	assert.NotNil(t, nodeInfo)
+
+	node := nodeInfo.Node()
+	assert.NotNil(t, node)
+
+	// Check GPU capacity
+	gpu := node.Status.Capacity["nvidia.com/gpu"]
+	assert.Equal(t, int64(1), gpu.Value())
+
+	// Check GPU taint exists
+	hasGPUTaint := false
+	for _, taint := range node.Spec.Taints {
+		if taint.Key == "nvidia.com/gpu" {
+			hasGPUTaint = true
+			assert.Equal(t, apiv1.TaintEffectNoSchedule, taint.Effect)
+		}
+	}
+	assert.True(t, hasGPUTaint, "GPU instance should have nvidia.com/gpu taint")
 }

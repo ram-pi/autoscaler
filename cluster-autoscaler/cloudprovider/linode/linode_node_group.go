@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/linode/linodego"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
@@ -199,7 +200,16 @@ func (n *NodeGroup) Nodes() ([]cloudprovider.Instance, error) {
 // that are started on the node by default, using manifest (most likely only
 // kube-proxy). Implementation optional.
 func (n *NodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
-	return nil, cloudprovider.ErrNotImplemented
+	klog.V(4).Infof("TemplateNodeInfo called for node group %s (type: %s)", n.id, n.poolOpts.Type)
+	node, err := n.buildNodeFromTemplate()
+	if err != nil {
+		klog.Errorf("TemplateNodeInfo failed for %s: %v", n.id, err)
+		return nil, err
+	}
+
+	klog.V(4).Infof("TemplateNodeInfo successfully created template node for %s", n.id)
+	nodeInfo := framework.NewNodeInfo(node, nil, &framework.PodInfo{Pod: cloudprovider.BuildKubeProxy(n.id)})
+	return nodeInfo, nil
 }
 
 // Exist checks if the node group really exists on the cloud provider side.
@@ -279,4 +289,59 @@ func (n *NodeGroup) findLKEPoolForNode(node *apiv1.Node) (*linodego.LKEClusterPo
 		}
 	}
 	return nil, nil
+}
+
+// buildNodeFromTemplate builds a template node from the Linode instance type
+func (n *NodeGroup) buildNodeFromTemplate() (*apiv1.Node, error) {
+	ctx := context.Background()
+
+	// Get instance type information from Linode API
+	linodeType, err := n.client.GetLinodeType(ctx, n.poolOpts.Type)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Linode instance type %q: %v", n.poolOpts.Type, err)
+	}
+
+	// Create a new node object
+	node := &apiv1.Node{}
+	nodeName := fmt.Sprintf("%s-template-%d", n.id, 0)
+
+	node.ObjectMeta.Name = nodeName
+	node.ObjectMeta.Labels = map[string]string{}
+
+	// Set node capacity based on instance type
+	node.Status.Capacity = apiv1.ResourceList{}
+	node.Status.Capacity[apiv1.ResourcePods] = *resource.NewQuantity(110, resource.DecimalSI)
+	node.Status.Capacity[apiv1.ResourceCPU] = *resource.NewQuantity(int64(linodeType.VCPUs), resource.DecimalSI)
+	node.Status.Capacity[apiv1.ResourceMemory] = *resource.NewQuantity(int64(linodeType.Memory)*1024*1024, resource.BinarySI)
+
+	// Add GPU capacity if this is a GPU instance
+	if linodeType.GPUs > 0 {
+		node.Status.Capacity["nvidia.com/gpu"] = *resource.NewQuantity(int64(linodeType.GPUs), resource.DecimalSI)
+	}
+
+	// Set allocatable resources (for simplicity, same as capacity)
+	// In production, this should account for system reservations
+	node.Status.Allocatable = node.Status.Capacity.DeepCopy()
+
+	// Add standard labels
+	node.Labels = cloudprovider.JoinStringMaps(node.Labels, map[string]string{
+		apiv1.LabelOSStable:           cloudprovider.DefaultOS,
+		apiv1.LabelArchStable:         cloudprovider.DefaultArch,
+		apiv1.LabelInstanceTypeStable: n.poolOpts.Type,
+	})
+
+	// Add GPU taints for GPU instances
+	if linodeType.GPUs > 0 {
+		node.Spec.Taints = []apiv1.Taint{
+			{
+				Key:    "nvidia.com/gpu",
+				Value:  "present",
+				Effect: apiv1.TaintEffectNoSchedule,
+			},
+		}
+	}
+
+	klog.V(4).Infof("Built template node: type=%s, CPU=%d, Memory=%d, GPU=%d, Taints=%v",
+		n.poolOpts.Type, linodeType.VCPUs, linodeType.Memory, linodeType.GPUs, node.Spec.Taints)
+	return node, nil
 }

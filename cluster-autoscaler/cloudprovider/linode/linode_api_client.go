@@ -35,6 +35,7 @@ type linodeAPIClient interface {
 	ListLKEClusterPools(ctx context.Context, clusterID int, opts *linodego.ListOptions) ([]linodego.LKEClusterPool, error)
 	CreateLKEClusterPool(ctx context.Context, clusterID int, createOpts linodego.LKEClusterPoolCreateOptions) (*linodego.LKEClusterPool, error)
 	DeleteLKEClusterPool(ctx context.Context, clusterID int, id int) error
+	GetLinodeType(ctx context.Context, typeID string) (*linodego.LinodeType, error)
 }
 
 // buildLinodeAPIClient returns the struct ready to perform calls to linode API
